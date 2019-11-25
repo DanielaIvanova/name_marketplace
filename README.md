@@ -1,21 +1,14 @@
 # NameMarketplace
 
-**TODO: Add description**
+## Sell name
+- make Spend tx with 10% of the price that you wosh for your name. In the `payload` you have to put the amount of tokens you wish for your name - and the name
+- make Transfer tx with the name to our app public key
 
-## Installation
 
-If [available in Hex](https://hex.pm/docs/publish), the package can be installed
-by adding `name_marketplace` to your list of dependencies in `mix.exs`:
-
-```elixir
-def deps do
-  [
-    {:name_marketplace, "~> 0.1.0"}
-  ]
-end
+## Buy name
+- check all the name in the list
+``` elixir
+NameMarketplace.choose_name
 ```
-
-Documentation can be generated with [ExDoc](https://github.com/elixir-lang/ex_doc)
-and published on [HexDocs](https://hexdocs.pm). Once published, the docs can
-be found at [https://hexdocs.pm/name_marketplace](https://hexdocs.pm/name_marketplace).
+You can see all the name in the market and there price. You can choose a name
 

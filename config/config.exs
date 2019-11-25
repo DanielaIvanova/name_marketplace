@@ -1,4 +1,8 @@
 import Config
+
+config :name_marketplace,
+  password: "123456"
+
 config :name_marketplace, :client,
   key_store_path: "my_keystore",
   network_id: "ae_uat",
