@@ -2,7 +2,7 @@ defmodule NameMarketplace do
   @moduledoc """
   Documentation for NameMarketplace.
   """
-  alias AeppSDK.{Client, Chain, Middleware}
+  alias AeppSDK.{AENS, Client, Chain, Middleware}
   alias AeppSDK.Utils.Keys
 
   use GenServer
@@ -89,6 +89,10 @@ defmodule NameMarketplace do
     %Client{keypair: %{public: my_pubkey}} = client = build_client()
     {:ok, height} = Chain.height(client)
 
+    with {:ok, %{transactions: list}} <- Middleware.get_tx_by_generation_range(client, height - 20, height),
+
+
+
     case Middleware.get_tx_by_generation_range(client, height - 20, height) do
       {:ok, %{transactions: list}} ->
         Enum.reduce(list, %{spend: [], transfer: []}, fn
@@ -107,9 +111,9 @@ defmodule NameMarketplace do
                 {:error, "No name and price in the payload"}
 
               {:ok, string} ->
-                # case String.split(string, "-") do
-                #   # Check the price
-                # end
+                case String.split(string, "-") do
+                  [price, name] -> AENS.validate_name(name)
+                end
                 # TODO: Add checks for correct name, price .....
                 name_price = process_payload_string_to_price(string)
                 name = process_payload_string_to_name(string)
@@ -186,6 +190,76 @@ defmodule NameMarketplace do
 
   defp schedule_work() do
     Process.send_after(self(), :work, 20_000)
+  end
+
+  defp asdf(list) do
+    Enum.reduce(list, %{spend: [], transfer: []}, fn
+      %{
+        tx: %{
+          recipient_id: ^my_pubkey,
+          sender_id: sender_id,
+          type: "SpendTx",
+          payload: payload,
+          amount: amount
+        }
+      } = tx,
+      acc ->
+        with {:ok, valid_string} <- check_name(payload),
+        name_price = process_payload_string_to_price(valid_string),
+        name = process_payload_string_to_name(valid_string),
+        {:ok, ""} <- :aeser_api_encoder.safe_decode(:bytearray, payload)
+
+
+
+        case :aeser_api_encoder.safe_decode(:bytearray, payload) do
+          {:ok, ""} ->
+            {:error, "No name and price in the payload"}
+
+          {:ok, string} ->
+            case String.split(string, "-") do
+              [price, name] -> AENS.validate_name(name)
+            end
+            # TODO: Add checks for correct name, price .....
+            name_price = process_payload_string_to_price(string)
+            name = process_payload_string_to_name(string)
+
+            if amount >= round(name_price * @selling_fee) do
+              data = %{name => name_price, confirmed: false}
+
+              unless Map.has_key?(state, sender_id) do
+                GenServer.cast(__MODULE__, {:put, data, tx.tx})
+              end
+            end
+
+          _ ->
+            {:error, "#############"}
+        end
+
+        Map.put(acc, :spend, [tx | Map.get(acc, :spend)])
+
+      %{tx: %{account_id: account_id, recipient_id: ^my_pubkey, type: "NameTransferTx"}} = tx,
+      acc ->
+
+
+        if Map.has_key?(state, account_id) do
+          update_confirmed(account_id)
+        end
+
+        Map.put(acc, :transfer, [tx | Map.get(acc, :transfer)])
+
+      _, acc ->
+        acc
+    end)
+  end
+
+  defp check_name(string) do
+   with [price, name] <- String.split(string, "-"),
+   {:ok, name} <- AENS.validate_name(name) do
+     name
+   else
+    {:error, reason} = error -> error
+    _ -> {:error, "Not valid format"}
+   end
   end
 
 
