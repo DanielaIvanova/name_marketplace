@@ -3,6 +3,7 @@ defmodule NameMarketplace do
   Documentation for NameMarketplace.
   """
   alias AeppSDK.{AENS, Client, Chain, Middleware}
+  alias AeternityNode.Api.NameService
   alias AeppSDK.Utils.Keys
   alias StateManager
 
@@ -45,14 +46,14 @@ defmodule NameMarketplace do
 
   def init(state) do
     StateManager.start_link()
-    schedule_work()
+    client = build_client()
+    schedule_work(client)
     {:ok, state}
   end
 
-  def handle_info(:work, _state) do
-    state = StateManager.get()
-    process_spend(state)
-    schedule_work()
+  def handle_info({:work, client}, state) do
+    track_sellings(client)
+    schedule_work(client)
 
     {:noreply, state}
   end
@@ -74,25 +75,17 @@ defmodule NameMarketplace do
     {:reply, state, state}
   end
 
-  # def handle_call({:put, data, %{sender_id: sender_id}}, from, state) do
-  #   new_state = Map.put(state, sender_id, data)
-  #   {:reply, :ok, new_state}
-  # end
+  def track_sellings(%Client{} = client) do
 
-  # def handle_cast({:update_confirmed, account_id}, state) do
-  #   new_state = Map.put(state, account_id, %{state[account_id] | confirmed: true})
-  #   {:noreply, new_state}
-  # end
-
-  def process_spend(state) do
-    %Client{keypair: %{public: my_pubkey}} = client = build_client()
     {:ok, height} = Chain.height(client)
+    IO.inspect("bang")
 
     case(Middleware.get_tx_by_generation_range(client, height - 20, height)) do
-      {:ok, %{transactions: list}} ->
-        process_txs(list, my_pubkey)
+      {:ok, %{transactions: txs_list}} ->
+        process_txs(txs_list, client, height)
 
       _ ->
+        Logger.info("#{__MODULE__}: Could not get txs from mdw")
         {:error, "Could not get txs"}
     end
   end
@@ -112,33 +105,14 @@ defmodule NameMarketplace do
     gas_price = Keyword.get(client_configuration, :gas_price)
     public_key = Keys.get_pubkey_from_secret_key(secret_key)
     key_pair = %{public: public_key, secret: secret_key}
-    Client.new(key_pair, network_id, url, internal_url, gas_price: gas_price)
+    IO.inspect Client.new(key_pair, network_id, url, internal_url, gas_price: gas_price)
   end
 
-  # def process_payload_string_to_price(string) do
-  #   string
-  #   |> String.split("-")
-  #   |> List.first()
-  #   |> String.to_integer()
-  # end
-
-  # def process_payload_string_to_name(string) do
-  #   string
-  #   |> String.split("-")
-  #   |> List.last()
-  # end
-
-  # def process_payload(string) do
-  #   case String.split(string, "-") do
-
-  #   end
-  # end
-
-  defp schedule_work() do
-    Process.send_after(self(), :work, 20_000)
+  defp schedule_work(client) do
+    Process.send_after(self(), {:work, client}, 5_000)
   end
 
-  defp process_txs(list, my_pubkey) do
+  defp process_txs(list, %Client{keypair: %{public: my_pubkey}} = client, height) do
     Enum.each(list, fn
       %{
         tx: %{
@@ -150,27 +124,46 @@ defmodule NameMarketplace do
         }
       } ->
         with {:ok, string} <- :aeser_api_encoder.safe_decode(:bytearray, payload),
-             {:ok, name, price} <- check_name_and_price(string, amount) do
+             {:ok, name, name_id, price} <-
+               check_name_and_price(string, amount, sender_id, height, client) do
           state = StateManager.get()
-
           case Map.has_key?(state, sender_id) do
             false ->
-              data = %{name => %{confirmed: false, price: price}}
+              data = %{name => %{confirmed: false, price: price, name_id: name}}
               StateManager.put(sender_id, data)
 
             true ->
               old_state = Map.get(state, sender_id)
-              new_data = Map.put(old_state, name, %{confirmed: false, price: price})
+
+              new_data =
+                Map.put(old_state, name, %{confirmed: false, price: price, name_id: name_id})
+
               StateManager.put(sender_id, new_data)
           end
         else
-          {:error, _} = err -> Logger.info(fn -> "Error: #{inspect(err)}" end)
+          {:error, _} = err -> err #Logger.info(fn -> "Error: #{inspect(err)}" end)
         end
 
-      %{tx: %{account_id: account_id, recipient_id: ^my_pubkey, type: "NameTransferTx"}} = tx ->
-        if Map.has_key?(state, account_id) do
-          IO.inspect(tx, label: "tx")
-          # StateManager.update(account_id, name)
+      %{
+        tx: %{
+          account_id: account_id,
+          recipient_id: ^my_pubkey,
+          type: "NameTransferTx",
+          name_id: name_id
+        }
+      } = tx ->
+        IO.inspect(tx)
+        with true <- StateManager.account_exists?(account_id),
+             {:ok, {name, _v}} <- StateManager.find_name_record_by_name_id(account_id, name_id) do
+          StateManager.update_confirmation(account_id, name)
+        else
+          false ->
+            :ok
+            #Logger.error("Given account: #{account_id},  is not selling any names at this moment or is not registered as buyer")
+
+          {:error, reason} = err ->
+            #Logger.error(reason)
+            err
         end
 
       _ ->
@@ -178,14 +171,29 @@ defmodule NameMarketplace do
     end)
   end
 
-  defp check_name_and_price(string, amount) do
+  defp check_name_and_price(string, amount, name_owner, height, %Client{} = client) do
     with [price, name] <- String.split(string, "-"),
          {:ok, name} <- AENS.validate_name(name),
+         {:ok,
+          [
+            %{
+              auction_end_height: auction_end_height,
+              name: ^name,
+              owner: ^name_owner,
+              name_hash: name_id,
+              pointers: _,
+              tx_hash: _,
+              expires_at: _,
+              created_at_height: _
+            }
+          ]} <- Middleware.search_name(client, name),
+         true <- height > auction_end_height,
          {:ok, price} <- validate_price(price, amount) do
-      {:ok, name, price}
+      {:ok, name, name_id, price}
     else
-      {:error, reason} = error -> error
-      _ -> {:error, "Not valid format"}
+      {:error, _} = error -> error
+      false -> {:error, "Name is still in auction, therefore cannot be sold!"}
+      _ = rsn -> {:error, "Invalid request, reason: #{inspect(rsn)}"}
     end
   end
 
