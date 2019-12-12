@@ -1,6 +1,6 @@
 %{
   "aebytecode": {:git, "https://github.com/aeternity/aebytecode.git", "4f4d6d30cd2c46b3830454d650a424d513f69134", [ref: "4f4d6d3"]},
-  "aepp_sdk_elixir": {:git, "https://github.com/aeternity/aepp-sdk-elixir.git", "fe023d4bbbbed14593fbd6f7f6b5301b410c4848", [tag: "v0.5.1"]},
+  "aepp_sdk_elixir": {:git, "https://github.com/aeternity/aepp-sdk-elixir.git", "e4d022684da1545b03558faf2a1e7c4cdce8bf6d", [tag: "v0.5.2"]},
   "aeserialization": {:git, "https://github.com/aeternity/aeserialization.git", "47aaa8f5434b365c50a35bfd1490340b19241991", [ref: "47aaa8f"]},
   "aesophia": {:git, "https://github.com/aeternity/aesophia.git", "b81312a714a5f618aacc0fe535f5b442373e2533", [tag: "v4.0.0"]},
   "argon2_elixir": {:hex, :argon2_elixir, "2.1.2", "c276b960f0b550a7613a9bebf8e14645ca5eb71a34a1bf0f896fe3511966b051", [:make, :mix], [{:comeonin, "~> 5.1", [hex: :comeonin, repo: "hexpm", optional: false]}, {:elixir_make, "~> 0.5", [hex: :elixir_make, repo: "hexpm", optional: false]}], "hexpm"},
@@ -29,5 +29,5 @@
   "tesla": {:hex, :tesla, "1.2.1", "864783cc27f71dd8c8969163704752476cec0f3a51eb3b06393b3971dc9733ff", [:mix], [{:exjsx, ">= 3.0.0", [hex: :exjsx, repo: "hexpm", optional: true]}, {:fuse, "~> 2.4", [hex: :fuse, repo: "hexpm", optional: true]}, {:hackney, "~> 1.6", [hex: :hackney, repo: "hexpm", optional: true]}, {:ibrowse, "~> 4.4.0", [hex: :ibrowse, repo: "hexpm", optional: true]}, {:jason, ">= 1.0.0", [hex: :jason, repo: "hexpm", optional: true]}, {:mime, "~> 1.0", [hex: :mime, repo: "hexpm", optional: false]}, {:poison, ">= 1.0.0", [hex: :poison, repo: "hexpm", optional: true]}], "hexpm"},
   "unicode_util_compat": {:hex, :unicode_util_compat, "0.4.1", "d869e4c68901dd9531385bb0c8c40444ebf624e60b6962d95952775cac5e90cd", [:rebar3], [], "hexpm"},
   "uuid": {:hex, :uuid, "1.1.8", "e22fc04499de0de3ed1116b770c7737779f226ceefa0badb3592e64d5cfb4eb9", [:mix], [], "hexpm"},
-  "websockex": {:hex, :websockex, "0.4.2", "9a3b7dc25655517ecd3f8ff7109a77fce94956096b942836cdcfbc7c86603ecc", [:mix], [], "hexpm"},
+  "websockex": {:git, "https://github.com/Azolo/websockex", "ce7064e1d6e8dfb1bba1bb8d3e75b71b88aabc1e", []},
 }

@@ -21,9 +21,8 @@ defmodule NameMarketplace.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:aepp_sdk_elixir, git: "https://github.com/aeternity/aepp-sdk-elixir.git", tag: "v0.5.1"},
-      {:websockex, "~> 0.4.2"},
-      {:gun, "~> 1.3"}
+      {:aepp_sdk_elixir, git: "https://github.com/aeternity/aepp-sdk-elixir.git", tag: "v0.5.2"},
+      {:websockex, git: "https://github.com/Azolo/websockex"}
     ]
   end
 end

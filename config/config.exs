@@ -1,7 +1,8 @@
 import Config
 
 config :name_marketplace,
-  password: "123456"
+  password: "123456",
+  pubkey: "ak_2q5ESPrAyyxXyovUaRYE6C9is93ZCXmfTfJxGH9oWkDV6SEa1R"
 
 config :name_marketplace, :client,
   key_store_path: "my_keystore",

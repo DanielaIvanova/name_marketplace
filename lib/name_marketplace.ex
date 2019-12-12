@@ -1,92 +1,122 @@
 defmodule NameMarketplace do
-  @moduledoc """
-  Documentation for NameMarketplace.
-  """
+  use WebSockex
+
+  @default_pubkey Application.get_env(
+                    :name_marketplace,
+                    :pubkey,
+                    "ak_2q5ESPrAyyxXyovUaRYE6C9is93ZCXmfTfJxGH9oWkDV6SEa1R"
+                  )
   alias AeppSDK.{AENS, Client, Chain, Middleware}
   alias AeternityNode.Api.NameService
   alias AeppSDK.Utils.Keys
-  alias StateManager
-
-  use GenServer
 
   require Logger
-
+  @gc_time 120
   @selling_fee 0.10
-
+  @awaiting_for_confirmation :awaiting_for_transfer
+  @received_name_transfer :received_name_transfer
+  @infinite_expiry :never
+  @spend_tx_type "SpendTx"
+  @name_transfer_tx_type "NameTransferTx"
   def start_link() do
-    GenServer.start(
-      __MODULE__,
-      %{},
-      name: __MODULE__
+    WebSockex.start("wss://testnet.aeternal.io/websocket", __MODULE__, %{client: build_client()},
+      name: __MODULE__,
+      debug: [:trace]
     )
   end
 
-  ## Sell logic
+  def subscribe(<<"ak_"::binary, _::binary>> = account \\ @default_pubkey) do
 
-  def choose_name do
-    GenServer.call(__MODULE__, :choose_name)
+    request = %{target: account, payload: "Object", op: "Subscribe"}
+
+    WebSockex.send_frame(__MODULE__, {:text, Poison.encode!(request)})
   end
 
-  def state do
-    StateManager.get()
-  end
-
-  # def update_confirmed(account_id) do
-  #   GenServer.cast(__MODULE__, {:update_confirmed, account_id})
-  # end
-
-  ## Buy name
-  # def buy_name() do
-  #   {:ok, height} = Chain.height(client)
-
-  #   case Middleware.get_tx_by_generation_range(client, height - 20, height) do
-
-  #   end
-  # end
-
-  def init(state) do
-    StateManager.start_link()
-    client = build_client()
-    schedule_work(client)
+  def handle_frame({:text, "connected"}, state) do
     {:ok, state}
   end
 
-  def handle_info({:work, client}, state) do
-    track_sellings(client)
-    schedule_work(client)
-
-    {:noreply, state}
-  end
-
-  def handle_call(:choose_name, _from, state) do
-    info =
-      Enum.reduce(state, [], fn
-        {_key, %{confirmed: true} = value}, acc ->
-          [value | acc]
-
-        _, acc ->
-          acc
-      end)
-
-    {:reply, info, state}
-  end
-
-  def handle_call(:state, _from, state) do
-    {:reply, state, state}
-  end
-
-  def track_sellings(%Client{} = client) do
-
+  def handle_frame({:text, msg}, %{client: client} = state) do
     {:ok, height} = Chain.height(client)
-    IO.inspect("bang")
 
-    case(Middleware.get_tx_by_generation_range(client, height - 20, height)) do
-      {:ok, %{transactions: txs_list}} ->
-        process_txs(txs_list, client, height)
+    case Poison.decode(msg, keys: :atoms) do
+      {:ok, %{payload: %{hash: hash, tx: %{type: @spend_tx_type} = tx}}} ->
+        process_tx(tx, hash, height, state)
+
+      {:ok, %{payload: %{hash: hash, tx: %{type: @name_transfer_tx_type} = tx}}} ->
+        process_tx(tx, hash, height, state)
 
       _ ->
-        Logger.info("#{__MODULE__}: Could not get txs from mdw")
-        {:error, "Could not get txs"}
+        {:ok, state}
+    end
+  end
+
+  def handle_disconnect(disconnect_map, state) do
+    super(disconnect_map, state)
+  end
+
+  defp process_tx(
+         %{type: @spend_tx_type, payload: payload, amount: amount, sender_id: sender_id} = tx,
+         hash,
+         height,
+         %{client: client} = state
+       ) do
+
+    if Map.has_key?(state, hash) do
+      {:ok, garbage_collect(state)}
+    else
+      with {:ok, string} <- :aeser_api_encoder.safe_decode(:bytearray, payload),
+           {:ok, name, name_id, price} <-
+             check_name_and_price(string, amount, sender_id, height, client) do
+        tx_data =
+          Map.put(tx, :name_tx, %{
+            name: name,
+            name_id: name_id,
+            price: price,
+            status: @awaiting_for_confirmation
+          })
+          |> Map.put(:delete_at, :os.system_time(:seconds) + @gc_time)
+
+        {:ok, garbage_collect(Map.put(state, hash, tx_data))}
+      else
+        {:error, _} = err ->
+          Logger.error(fn -> "Error: #{inspect(err)}" end)
+          {:ok, garbage_collect(state)}
+      end
+    end
+  end
+
+  defp process_tx(
+         %{
+           type: @name_transfer_tx_type,
+           name_id: name_id,
+           recipient_id: recipient_id,
+           account_id: account_id
+         } = tx,
+         hash,
+         height,
+         %{client: %{keypair: %{public: public_key}}} = state
+       ) do
+
+    res =
+      Enum.find(state, :not_found, fn
+        {<<_::binary>>, v} ->
+          v.name_tx.name_id === name_id && v.sender_id === account_id &&
+            v.name_tx.status === @awaiting_for_confirmation
+
+        _ ->
+          false
+      end)
+
+
+    case res do
+      {spend_tx_hash, %{name_tx: name_tx_info} = record} ->
+        new_name_tx_info = Map.merge(%{name_tx_info | status: @received_name_transfer}, tx)
+        updated_record = %{record | name_tx: new_name_tx_info, delete_at: @infinite_expiry}
+        {:ok, garbage_collect(Map.put(state, spend_tx_hash, updated_record))}
+
+      :not_found ->
+        {:ok, garbage_collect(state)}
     end
   end
 
@@ -95,9 +125,9 @@ defmodule NameMarketplace do
     password = Application.get_env(:name_marketplace, :password)
 
     secret_key =
-      client_configuration
-      |> Keyword.get(:key_store_path)
-      |> Keys.read_keystore(password)
+     client_configuration
+     |> Keyword.get(:key_store_path)
+     |> Keys.read_keystore(password)
 
     network_id = Keyword.get(client_configuration, :network_id)
     url = Keyword.get(client_configuration, :url)
@@ -105,73 +135,10 @@ defmodule NameMarketplace do
     gas_price = Keyword.get(client_configuration, :gas_price)
     public_key = Keys.get_pubkey_from_secret_key(secret_key)
     key_pair = %{public: public_key, secret: secret_key}
-    IO.inspect Client.new(key_pair, network_id, url, internal_url, gas_price: gas_price)
+    Client.new(key_pair, network_id, url, internal_url, gas_price: gas_price)
   end
 
-  defp schedule_work(client) do
-    Process.send_after(self(), {:work, client}, 5_000)
-  end
-
-  defp process_txs(list, %Client{keypair: %{public: my_pubkey}} = client, height) do
-    Enum.each(list, fn
-      %{
-        tx: %{
-          recipient_id: ^my_pubkey,
-          sender_id: sender_id,
-          type: "SpendTx",
-          payload: payload,
-          amount: amount
-        }
-      } ->
-        with {:ok, string} <- :aeser_api_encoder.safe_decode(:bytearray, payload),
-             {:ok, name, name_id, price} <-
-               check_name_and_price(string, amount, sender_id, height, client) do
-          state = StateManager.get()
-          case Map.has_key?(state, sender_id) do
-            false ->
-              data = %{name => %{confirmed: false, price: price, name_id: name}}
-              StateManager.put(sender_id, data)
-
-            true ->
-              old_state = Map.get(state, sender_id)
-
-              new_data =
-                Map.put(old_state, name, %{confirmed: false, price: price, name_id: name_id})
-
-              StateManager.put(sender_id, new_data)
-          end
-        else
-          {:error, _} = err -> err #Logger.info(fn -> "Error: #{inspect(err)}" end)
-        end
-
-      %{
-        tx: %{
-          account_id: account_id,
-          recipient_id: ^my_pubkey,
-          type: "NameTransferTx",
-          name_id: name_id
-        }
-      } = tx ->
-        IO.inspect(tx)
-        with true <- StateManager.account_exists?(account_id),
-             {:ok, {name, _v}} <- StateManager.find_name_record_by_name_id(account_id, name_id) do
-          StateManager.update_confirmation(account_id, name)
-        else
-          false ->
-            :ok
-            #Logger.error("Given account: #{account_id},  is not selling any names at this moment or is not registered as buyer")
-
-          {:error, reason} = err ->
-            #Logger.error(reason)
-            err
-        end
-
-      _ ->
-        :ok
-    end)
-  end
-
-  defp check_name_and_price(string, amount, name_owner, height, %Client{} = client) do
+  defp check_name_and_price(string, amount, name_owner, height, client) do
     with [price, name] <- String.split(string, "-"),
          {:ok, name} <- AENS.validate_name(name),
          {:ok,
@@ -187,13 +154,13 @@ defmodule NameMarketplace do
               created_at_height: _
             }
           ]} <- Middleware.search_name(client, name),
-         true <- height > auction_end_height,
+         true <- height >= auction_end_height,
          {:ok, price} <- validate_price(price, amount) do
       {:ok, name, name_id, price}
     else
       {:error, _} = error -> error
       false -> {:error, "Name is still in auction, therefore cannot be sold!"}
-      _ = rsn -> {:error, "Invalid request, reason: #{inspect(rsn)}"}
+      _ = rsn -> {:error, "Name is not owned by #{inspect(name_owner)}, rejected!"}
     end
   end
 
@@ -206,5 +173,29 @@ defmodule NameMarketplace do
       {_, _} -> {:error, "Invalid price format"}
       false -> {:error, "Invalid price"}
     end
+  end
+
+  defp garbage_collect(state) do
+    current_time = :os.system_time(:seconds)
+    Logger.info("GC TIME! Current state: #{inspect(state)}")
+
+    new_state =
+      Enum.reduce(state, %{}, fn
+        {:client = k, v}, acc ->
+          Map.put(acc, k, v)
+
+        {<<_::binary>> = k, %{delete_at: @infinite_expiry} = v}, acc ->
+          Map.put(acc, k, v)
+
+        {<<_::binary>> = k, %{delete_at: delete_at} = v}, acc ->
+          if delete_at <= current_time do
+            acc
+          else
+            Map.put(acc, k, v)
+          end
+      end)
+
+    Logger.info("State after GC: #{inspect(new_state)}")
+    new_state
   end
 end
