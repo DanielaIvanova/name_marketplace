@@ -1,23 +1,29 @@
 defmodule NameMarketplace do
   use WebSockex
 
+  alias AeppSDK.{AENS, Client, Chain, Middleware}
+  alias AeppSDK.Utils.Keys
+
+  require Logger
+
   @default_pubkey Application.get_env(
                     :name_marketplace,
                     :pubkey,
                     "ak_2q5ESPrAyyxXyovUaRYE6C9is93ZCXmfTfJxGH9oWkDV6SEa1R"
                   )
-  alias AeppSDK.{AENS, Client, Chain, Middleware}
-  alias AeternityNode.Api.NameService
-  alias AeppSDK.Utils.Keys
+  @gc_time Application.get_env(
+             :name_marketplace,
+             :gc_time,
+             120
+           )
 
-  require Logger
-  @gc_time 120
   @selling_fee 0.10
   @awaiting_for_confirmation :awaiting_for_transfer
   @received_name_transfer :received_name_transfer
   @infinite_expiry :never
   @spend_tx_type "SpendTx"
   @name_transfer_tx_type "NameTransferTx"
+
   def start_link() do
     WebSockex.start("wss://testnet.aeternal.io/websocket", __MODULE__, %{client: build_client()},
       name: __MODULE__,
@@ -26,7 +32,6 @@ defmodule NameMarketplace do
   end
 
   def subscribe(<<"ak_"::binary, _::binary>> = account \\ @default_pubkey) do
-
     request = %{target: account, payload: "Object", op: "Subscribe"}
 
     WebSockex.send_frame(__MODULE__, {:text, Poison.encode!(request)})
@@ -43,8 +48,8 @@ defmodule NameMarketplace do
       {:ok, %{payload: %{hash: hash, tx: %{type: @spend_tx_type} = tx}}} ->
         process_tx(tx, hash, height, state)
 
-      {:ok, %{payload: %{hash: hash, tx: %{type: @name_transfer_tx_type} = tx}}} ->
-        process_tx(tx, hash, height, state)
+      {:ok, %{payload: %{tx: %{type: @name_transfer_tx_type} = tx}}} ->
+        process_tx(tx, state)
 
       _ ->
         {:ok, state}
@@ -61,7 +66,6 @@ defmodule NameMarketplace do
          height,
          %{client: client} = state
        ) do
-
     if Map.has_key?(state, hash) do
       {:ok, garbage_collect(state)}
     else
@@ -90,14 +94,10 @@ defmodule NameMarketplace do
          %{
            type: @name_transfer_tx_type,
            name_id: name_id,
-           recipient_id: recipient_id,
            account_id: account_id
          } = tx,
-         hash,
-         height,
-         %{client: %{keypair: %{public: public_key}}} = state
+         state
        ) do
-
     res =
       Enum.find(state, :not_found, fn
         {<<_::binary>>, v} ->
@@ -107,7 +107,6 @@ defmodule NameMarketplace do
         _ ->
           false
       end)
-
 
     case res do
       {spend_tx_hash, %{name_tx: name_tx_info} = record} ->
@@ -120,14 +119,14 @@ defmodule NameMarketplace do
     end
   end
 
-  def build_client() do
+  defp build_client() do
     client_configuration = Application.get_env(:name_marketplace, :client)
     password = Application.get_env(:name_marketplace, :password)
 
     secret_key =
-     client_configuration
-     |> Keyword.get(:key_store_path)
-     |> Keys.read_keystore(password)
+      client_configuration
+      |> Keyword.get(:key_store_path)
+      |> Keys.read_keystore(password)
 
     network_id = Keyword.get(client_configuration, :network_id)
     url = Keyword.get(client_configuration, :url)
@@ -160,7 +159,7 @@ defmodule NameMarketplace do
     else
       {:error, _} = error -> error
       false -> {:error, "Name is still in auction, therefore cannot be sold!"}
-      _ = rsn -> {:error, "Name is not owned by #{inspect(name_owner)}, rejected!"}
+      _ -> {:error, "Name is not owned by #{inspect(name_owner)}, rejected!"}
     end
   end
 
