@@ -17,6 +17,7 @@ defmodule NameMarketplace do
              120
            )
 
+
   @selling_fee 0.10
   @awaiting_for_confirmation :awaiting_for_transfer
   @received_name_transfer :received_name_transfer
